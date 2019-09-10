@@ -14,12 +14,12 @@ class QLearningTable:
         self.actions = actions  # a list
         self.lr = learning_rate
         self.gamma = reward_decay
-        self.epsilon = e_greedy
+        self.epsilon = e_greedy  # 贪婪策略的参数
         self.q_table = pd.DataFrame(columns=self.actions, dtype=np.float64)
 
     def choose_action(self, observation):
         self.check_state_exist(observation)
-        # action selection
+        # action selection: 以 epsilon 的概率选择最优的动作, 以 (1-epsilon) 的概率选随机动作
         if np.random.uniform() < self.epsilon:
             # choose best action
             state_action = self.q_table.loc[observation, :]
@@ -40,6 +40,7 @@ class QLearningTable:
         self.q_table.loc[s, a] += self.lr * (q_target - q_predict)  # update
 
     def check_state_exist(self, state):
+        """检查该状态在Q表中是否存在,若不存在,则将状态添加到Q表中"""
         if state not in self.q_table.index:
             # append new state to q table
             self.q_table = self.q_table.append(
