@@ -5,7 +5,7 @@ from RL_brain import DeepQNetwork
 def run_maze():
     step = 0
     for episode in range(300):
-        # initial observation
+        # initial observation (得到初始状态)
         observation = env.reset()
 
         while True:
@@ -18,8 +18,10 @@ def run_maze():
             # RL take action and get next observation and reward
             observation_, reward, done = env.step(action)
 
+            # 存储经验
             RL.store_transition(observation, action, reward, observation_)
 
+            # 大于200步, 每5步更新一次
             if (step > 200) and (step % 5 == 0):
                 RL.learn()
 
@@ -45,7 +47,7 @@ if __name__ == "__main__":
                       e_greedy=0.9,
                       replace_target_iter=200,
                       memory_size=2000,
-                      # output_graph=True
+                      output_graph=True
                       )
     env.after(100, run_maze)
     env.mainloop()

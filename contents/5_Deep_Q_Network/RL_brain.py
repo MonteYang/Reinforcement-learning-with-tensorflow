@@ -22,8 +22,8 @@ tf.set_random_seed(1)
 class DeepQNetwork:
     def __init__(
             self,
-            n_actions,
-            n_features,
+            n_actions,                  # 动作的个数
+            n_features,                 # 状态state的个数
             learning_rate=0.01,
             reward_decay=0.9,
             e_greedy=0.9,
@@ -39,10 +39,10 @@ class DeepQNetwork:
         self.gamma = reward_decay
         self.epsilon_max = e_greedy
         self.replace_target_iter = replace_target_iter
-        self.memory_size = memory_size
-        self.batch_size = batch_size
-        self.epsilon_increment = e_greedy_increment
-        self.epsilon = 0 if e_greedy_increment is not None else self.epsilon_max
+        self.memory_size = memory_size  # 记忆上限
+        self.batch_size = batch_size   # 每次更新时从 memory 里面取多少记忆出来
+        self.epsilon_increment = e_greedy_increment  # epsilon 的增量
+        self.epsilon = 0 if e_greedy_increment is not None else self.epsilon_max  # 是否开启探索模式, 并逐步减少探索次数
 
         # total learning step
         self.learn_step_counter = 0
@@ -52,38 +52,54 @@ class DeepQNetwork:
 
         # consist of [target_net, evaluate_net]
         self._build_net()
-        t_params = tf.get_collection('target_net_params')
-        e_params = tf.get_collection('eval_net_params')
+
+        # 网络e的参数赋给网络t
+        t_params = tf.get_collection('target_net_params')   # list, 提取 target_net 的参数
+        e_params = tf.get_collection('eval_net_params')     # list, 提取  eval_net 的参数
         self.replace_target_op = [tf.assign(t, e) for t, e in zip(t_params, e_params)]
 
         self.sess = tf.Session()
 
+        # 输出 tensorboard 文件
         if output_graph:
             # $ tensorboard --logdir=logs
             # tf.train.SummaryWriter soon be deprecated, use following
             tf.summary.FileWriter("logs/", self.sess.graph)
 
         self.sess.run(tf.global_variables_initializer())
+
+        # 记录所有 cost 变化, 用于最后 plot 出来观看
         self.cost_his = []
 
     def _build_net(self):
-        # ------------------ build evaluate_net ------------------
+        """
+            建立两个网络,结构相同但是参数不同:
+            evaluate_net: 两层神经网络 l1, l2
+            target_net:
+        """
+        # ------------------ evaluate_net ------------------
+        # 输入: 状态s, shape [None, self.n_features]
+        # 输出: 每个动作action的q_eval值, shape []
+        # loss: self.loss = tf.reduce_mean(tf.squared_difference(self.q_target, self.q_eval))
+
+        # placeholder有俩个: 输入状态s, 用于求loss的q_target
         self.s = tf.placeholder(tf.float32, [None, self.n_features], name='s')  # input
         self.q_target = tf.placeholder(tf.float32, [None, self.n_actions], name='Q_target')  # for calculating loss
+
         with tf.variable_scope('eval_net'):
-            # c_names(collections_names) are the collections to store variables
+            # c_names(collections_names) are the collections to store variables (tf变量属于的集合名)
             c_names, n_l1, w_initializer, b_initializer = \
                 ['eval_net_params', tf.GraphKeys.GLOBAL_VARIABLES], 10, \
                 tf.random_normal_initializer(0., 0.3), tf.constant_initializer(0.1)  # config of layers
 
             # first layer. collections is used later when assign to target net
-            with tf.variable_scope('l1'):
+            with tf.variable_scope('layer1'):
                 w1 = tf.get_variable('w1', [self.n_features, n_l1], initializer=w_initializer, collections=c_names)
                 b1 = tf.get_variable('b1', [1, n_l1], initializer=b_initializer, collections=c_names)
                 l1 = tf.nn.relu(tf.matmul(self.s, w1) + b1)
 
             # second layer. collections is used later when assign to target net
-            with tf.variable_scope('l2'):
+            with tf.variable_scope('layer2'):
                 w2 = tf.get_variable('w2', [n_l1, self.n_actions], initializer=w_initializer, collections=c_names)
                 b2 = tf.get_variable('b2', [1, self.n_actions], initializer=b_initializer, collections=c_names)
                 self.q_eval = tf.matmul(l1, w2) + b2
@@ -94,24 +110,26 @@ class DeepQNetwork:
             self._train_op = tf.train.RMSPropOptimizer(self.lr).minimize(self.loss)
 
         # ------------------ build target_net ------------------
+        # 与 evaluate_net 的网络结构相同
         self.s_ = tf.placeholder(tf.float32, [None, self.n_features], name='s_')    # input
         with tf.variable_scope('target_net'):
             # c_names(collections_names) are the collections to store variables
             c_names = ['target_net_params', tf.GraphKeys.GLOBAL_VARIABLES]
 
             # first layer. collections is used later when assign to target net
-            with tf.variable_scope('l1'):
+            with tf.variable_scope('layer1'):
                 w1 = tf.get_variable('w1', [self.n_features, n_l1], initializer=w_initializer, collections=c_names)
                 b1 = tf.get_variable('b1', [1, n_l1], initializer=b_initializer, collections=c_names)
                 l1 = tf.nn.relu(tf.matmul(self.s_, w1) + b1)
 
             # second layer. collections is used later when assign to target net
-            with tf.variable_scope('l2'):
+            with tf.variable_scope('layer2'):
                 w2 = tf.get_variable('w2', [n_l1, self.n_actions], initializer=w_initializer, collections=c_names)
                 b2 = tf.get_variable('b2', [1, self.n_actions], initializer=b_initializer, collections=c_names)
                 self.q_next = tf.matmul(l1, w2) + b2
 
     def store_transition(self, s, a, r, s_):
+        """存储经验"""
         if not hasattr(self, 'memory_counter'):
             self.memory_counter = 0
 
@@ -125,6 +143,7 @@ class DeepQNetwork:
 
     def choose_action(self, observation):
         # to have batch dimension when feed into tf placeholder
+        # (填一个维度(batch的维度), 为了能够传进神经网络中)
         observation = observation[np.newaxis, :]
 
         if np.random.uniform() < self.epsilon:
@@ -137,6 +156,7 @@ class DeepQNetwork:
 
     def learn(self):
         # check to replace target parameters
+        # 每隔 self.replace_target_iter 次数, 将 evaluate net 的参数更新到 target net 中
         if self.learn_step_counter % self.replace_target_iter == 0:
             self.sess.run(self.replace_target_op)
             print('\ntarget_params_replaced\n')
@@ -148,6 +168,10 @@ class DeepQNetwork:
             sample_index = np.random.choice(self.memory_counter, size=self.batch_size)
         batch_memory = self.memory[sample_index, :]
 
+        ############# 重点 #############
+        # q_next: 下一个状态求出来的Q值, 用于更新q_target, 再用更新后的q_target与原先的q_eval"作差"进行反向传播, 更新q_eval网络
+        # q_eval: 当前状态求出来的Q值
+        ##########################
         q_next, q_eval = self.sess.run(
             [self.q_next, self.q_eval],
             feed_dict={
@@ -162,9 +186,10 @@ class DeepQNetwork:
         eval_act_index = batch_memory[:, self.n_features].astype(int)
         reward = batch_memory[:, self.n_features + 1]
 
+        # 更新q_target, 用下一步的状态求出来的Q值更新q_target
         q_target[batch_index, eval_act_index] = reward + self.gamma * np.max(q_next, axis=1)
 
-        """
+        """ TODO ???
         For example in this batch I have 2 samples and 3 actions:
         q_eval =
         [[1, 2, 3],
@@ -194,9 +219,12 @@ class DeepQNetwork:
         _, self.cost = self.sess.run([self._train_op, self.loss],
                                      feed_dict={self.s: batch_memory[:, :self.n_features],
                                                 self.q_target: q_target})
+
+        # 为了可视化cost曲线
         self.cost_his.append(self.cost)
 
         # increasing epsilon
+        # epsilon不断提高,不断侧重选择最优得方案,而不是随机
         self.epsilon = self.epsilon + self.epsilon_increment if self.epsilon < self.epsilon_max else self.epsilon_max
         self.learn_step_counter += 1
 
@@ -206,6 +234,3 @@ class DeepQNetwork:
         plt.ylabel('Cost')
         plt.xlabel('training steps')
         plt.show()
-
-
-
